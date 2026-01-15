@@ -1,0 +1,77 @@
+{
+  "name": "ai-sdk-provider-copilot",
+  "version": "0.1.0",
+  "description": "Community AI SDK provider for GitHub Copilot CLI",
+  "author": "",
+  "license": "MIT",
+  "keywords": [
+    "ai",
+    "vercel",
+    "ai-sdk",
+    "provider",
+    "github",
+    "copilot",
+    "copilot-cli",
+    "language-model",
+    "llm"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rimraf dist",
+    "dev": "tsup --watch",
+    "lint": "eslint src --max-warnings 0",
+    "format": "prettier --write \"src/**/*.ts\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"*.md\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "type-check": "tsc --noEmit",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.0",
+    "@ai-sdk/provider-utils": "^4.0.1"
+  },
+  "peerDependencies": {
+    "@github/copilot-sdk": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@github/copilot-sdk": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@github/copilot-sdk": "file:../copilot-sdk/nodejs",
+    "@types/node": "^20.19.26",
+    "@vitest/coverage-v8": "^4.0.15",
+    "ai": "^6.0.3",
+    "prettier": "^3.7.4",
+    "rimraf": "^6.1.2",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
