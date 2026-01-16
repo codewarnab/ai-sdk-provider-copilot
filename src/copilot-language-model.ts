@@ -1,3 +1,12 @@
+/**
+ * Copilot Language Model implementation for the Vercel AI SDK V3.
+ * 
+ * Bridges the stateless AI SDK model interface to the session-based
+ * Copilot SDK, providing both streaming and non-streaming generation.
+ * 
+ * @module copilot-language-model
+ */
+
 import type {
     LanguageModelV3,
     LanguageModelV3CallOptions,
@@ -7,6 +16,7 @@ import type {
     LanguageModelV3FinishReason,
     LanguageModelV3Usage,
     SharedV3Warning,
+    LanguageModelV3ToolCall,
 } from '@ai-sdk/provider';
 import {
     CopilotClient,
@@ -20,14 +30,43 @@ import {
     createStreamContext,
     mapFinishReason,
     getDefaultUsage,
+    type ToolRequest,
 } from './event-mapper.js';
-import type { CopilotProviderOptions, CopilotModelSettings } from './types.js';
+import { mapToolChoiceToCopilotFormat } from './tool-mapper.js';
+import { processStructuredOutput } from './structured-output.js';
+import { createReasoningContext, createReasoningContent } from './reasoning-mapper.js';
+import { mergeMcpConfigs } from './mcp-config.js';
+import { isAgentModelId, resolveAgent, buildAgentSystemMessage, getAgentModelId } from './agent-resolver.js';
+import type { ClientManager } from './client-manager.js';
+import { withRetry, mergeRetryOptions } from './retry.js';
+import { createRequestContext, withTiming } from './telemetry.js';
+import type { CopilotProviderOptions, CopilotModelSettings, CopilotCallOptions, Logger } from './types.js';
 
+/**
+ * Options for creating a CopilotLanguageModel instance.
+ */
 export interface CopilotLanguageModelOptions {
+    /** The model ID to use */
     modelId: string;
+    /** Provider-level configuration options */
     providerOptions: CopilotProviderOptions;
+    /** Model-specific settings */
     settings?: CopilotModelSettings;
+    /** Shared client manager from provider (Phase 5) */
+    clientManager?: ClientManager;
+    /** Logger instance from provider (Phase 5) */
+    logger?: Logger;
 }
+
+/**
+ * No-op logger for when none is provided.
+ */
+const noopLogger: Logger = {
+    debug: () => { },
+    info: () => { },
+    warn: () => { },
+    error: () => { },
+};
 
 /**
  * AI SDK V3 Language Model implementation for GitHub Copilot.
@@ -43,16 +82,26 @@ export class CopilotLanguageModel implements LanguageModelV3 {
 
     private client?: CopilotClient;
     private session?: CopilotSession;
-    private sessionPromise?: Promise<CopilotSession>;
+    private clientManager?: ClientManager;
+    private logger: Logger;
 
     constructor(private options: CopilotLanguageModelOptions) {
         this.modelId = options.modelId;
+        this.clientManager = options.clientManager;
+        this.logger = options.logger ?? noopLogger;
     }
 
     /**
      * Ensures a client exists, creating one if necessary.
+     * Uses shared client manager if available, otherwise creates new client.
      */
-    private ensureClient(): CopilotClient {
+    private async ensureClient(): Promise<CopilotClient> {
+        // Use shared client manager if available (Phase 5)
+        if (this.clientManager) {
+            return this.clientManager.acquire();
+        }
+
+        // Fallback to creating own client (backward compatibility)
         if (!this.client) {
             this.client = new CopilotClient({
                 cliPath: this.options.providerOptions.cliPath,
@@ -68,21 +117,88 @@ export class CopilotLanguageModel implements LanguageModelV3 {
     }
 
     /**
-     * Ensures a session exists, creating one if necessary.
+     * Releases client reference when using shared client manager.
      */
-    private async ensureSession(streaming = false): Promise<CopilotSession> {
-        // For simplicity in Phase 1, we create a fresh session for each call
-        // to ensure stateless behavior per the AI SDK pattern.
-        // We may optimize this in Phase 5 with session pooling.
-        const client = this.ensureClient();
+    private releaseClient(): void {
+        if (this.clientManager) {
+            this.clientManager.release();
+        }
+    }
+
+    /**
+     * Ensures a session exists, creating one if necessary.
+     * Supports Phase 4 features: BYOK, MCP servers, custom agents, structured output.
+     */
+    private async ensureSession(
+        client: CopilotClient,
+        streaming = false,
+        callOptions?: CopilotCallOptions,
+        structuredOutputAppend?: string
+    ): Promise<CopilotSession> {
+        // Check if this is an agent model or agent specified via call options
+        let agent = resolveAgent(this.modelId, this.options.providerOptions.customAgents);
+
+        // Call-level agent selection takes precedence
+        if (callOptions?.agent && !agent) {
+            agent = this.options.providerOptions.customAgents?.find(a => a.name === callOptions.agent) ?? null;
+            if (!agent) {
+                const availableAgents = this.options.providerOptions.customAgents?.map(a => a.name).join(', ') || 'none';
+                throw new Error(`Custom agent '${callOptions.agent}' not found. Available agents: ${availableAgents}`);
+            }
+        }
+
+        // Determine actual model ID
+        const actualModelId = agent
+            ? getAgentModelId(agent)
+            : (isAgentModelId(this.modelId) ? undefined : this.modelId);
+
+        // Determine system message (agent overrides settings)
+        let systemMessage = agent
+            ? buildAgentSystemMessage(agent)
+            : this.options.settings?.systemMessage;
+
+        // Append structured output instructions if needed
+        if (structuredOutputAppend && systemMessage) {
+            if (systemMessage.mode === 'replace') {
+                systemMessage = {
+                    mode: 'replace',
+                    content: systemMessage.content + structuredOutputAppend,
+                };
+            } else {
+                systemMessage = {
+                    mode: 'append',
+                    content: (systemMessage.content || '') + structuredOutputAppend,
+                };
+            }
+        } else if (structuredOutputAppend) {
+            systemMessage = {
+                mode: 'append',
+                content: structuredOutputAppend,
+            };
+        }
+
+        // Merge MCP configs: provider-level + agent-level + call-level
+        const providerMcpServers = this.options.providerOptions.mcpServers;
+        const agentMcpServers = agent?.mcpServers;
+        const callMcpServers = callOptions?.mcpServers;
+        const mergedMcpServers = mergeMcpConfigs(
+            mergeMcpConfigs(providerMcpServers, agentMcpServers),
+            callMcpServers
+        );
+
+        // Determine provider config (model-level overrides provider-level)
+        const providerConfig = this.options.settings?.provider
+            ?? this.options.providerOptions.provider;
 
         const session = await client.createSession({
-            model: this.modelId,
-            provider: this.options.providerOptions.provider,
-            systemMessage: this.options.settings?.systemMessage,
+            model: actualModelId,
+            provider: providerConfig,
+            systemMessage,
             availableTools: this.options.settings?.availableTools,
             excludedTools: this.options.settings?.excludedTools,
             streaming,
+            mcpServers: mergedMcpServers,
+            customAgents: agent ? [agent] : this.options.providerOptions.customAgents,
         });
 
         return session;
@@ -91,123 +207,271 @@ export class CopilotLanguageModel implements LanguageModelV3 {
     async doGenerate(
         options: LanguageModelV3CallOptions
     ): Promise<LanguageModelV3GenerateResult> {
-        const session = await this.ensureSession(false);
+        const ctx = createRequestContext(this.modelId);
+        this.logger.info(`[${ctx.requestId}] Starting doGenerate for ${this.modelId}`);
+
         const warnings: SharedV3Warning[] = [];
 
-        // Map AI SDK prompt to Copilot format
-        const prompt = mapPromptToCopilotFormat(options.prompt);
+        // Extract Copilot-specific call options
+        const callOptions = options.providerOptions?.copilot as CopilotCallOptions | undefined;
 
-        // Set up abort signal handling
-        if (options.abortSignal) {
-            options.abortSignal.addEventListener(
-                'abort',
+        // Merge retry options from provider and call level
+        const retryOptions = mergeRetryOptions(
+            this.options.providerOptions.retry,
+            callOptions?.retry
+        );
+
+        try {
+            // Wrap main logic with retry
+            const result = await withRetry(
                 async () => {
-                    try {
-                        await session.abort();
-                    } catch {
-                        // Ignore abort errors
-                    }
+                    const { result, durationMs } = await withTiming(
+                        () => this.executeGenerate(options, warnings),
+                        this.logger,
+                        `generate:${ctx.requestId}`
+                    );
+
+                    this.logger.info(`[${ctx.requestId}] doGenerate completed in ${durationMs}ms`);
+                    return result;
                 },
-                { once: true }
+                retryOptions,
+                this.logger
             );
+
+            return result;
+        } catch (error) {
+            this.logger.error(`[${ctx.requestId}] doGenerate failed: ${error}`);
+            throw mapCopilotError(error);
+        }
+    }
+
+    private async executeGenerate(
+        options: LanguageModelV3CallOptions,
+        warnings: SharedV3Warning[]
+    ): Promise<LanguageModelV3GenerateResult> {
+        // Handle structured output (system prompt injection - only viable approach)
+        let structuredOutputAppend: string | undefined;
+        if (options.responseFormat?.type === 'json' && options.responseFormat.schema) {
+            const structuredResult = processStructuredOutput({
+                hasSchema: true,
+                schema: options.responseFormat.schema,
+                name: options.responseFormat.name,
+                description: options.responseFormat.description,
+            });
+            warnings.push(...structuredResult.warnings);
+            structuredOutputAppend = structuredResult.systemMessageAppend;
         }
 
-        // Collect response via events
-        return new Promise<LanguageModelV3GenerateResult>((resolve, reject) => {
-            const content: LanguageModelV3Content[] = [];
-            let usage: LanguageModelV3Usage | undefined;
-            let finishReason: LanguageModelV3FinishReason | undefined;
-            let responseId: string | undefined;
-            let responseTimestamp: Date | undefined;
-            const textParts: string[] = [];
+        // Get per-call options
+        const callOptions = options.providerOptions?.copilot as CopilotCallOptions | undefined;
 
-            const unsubscribe = session.on((event: SessionEvent) => {
-                switch (event.type) {
-                    case 'assistant.message':
-                        // Accumulate text content
-                        if ('content' in event.data && typeof event.data.content === 'string') {
-                            textParts.push(event.data.content);
-                        }
-                        responseId = event.id;
-                        responseTimestamp = new Date(event.timestamp);
-                        break;
+        // Acquire client and create session
+        const client = await this.ensureClient();
+        const session = await this.ensureSession(client, false, callOptions, structuredOutputAppend);
 
-                    case 'turn.end':
-                        // Turn complete - finalize response
-                        unsubscribe();
-
-                        // Combine all text parts into single content
-                        if (textParts.length > 0) {
-                            content.push({ type: 'text', text: textParts.join('') });
-                        }
-
-                        finishReason = { unified: 'stop', raw: 'complete' };
-
-                        // Cleanup session after this turn
-                        session.destroy().catch(() => {
-                            // Ignore cleanup errors
-                        });
-
-                        resolve({
-                            content,
-                            finishReason: finishReason ?? {
-                                unified: 'stop',
-                                raw: 'unknown',
-                            },
-                            usage: usage ?? {
-                                inputTokens: {
-                                    total: undefined,
-                                    noCache: undefined,
-                                    cacheRead: undefined,
-                                    cacheWrite: undefined,
-                                },
-                                outputTokens: {
-                                    total: undefined,
-                                    text: undefined,
-                                    reasoning: undefined,
-                                },
-                            },
-                            warnings,
-                            request: { body: prompt },
-                            response: {
-                                id: responseId ?? crypto.randomUUID(),
-                                timestamp: responseTimestamp ?? new Date(),
-                                modelId: this.modelId,
-                            },
-                        });
-                        break;
-
-                    case 'session.error':
-                        unsubscribe();
-                        session.destroy().catch(() => {
-                            // Ignore cleanup errors
-                        });
-
-                        if ('message' in event.data) {
-                            reject(mapCopilotError(new Error(event.data.message as string)));
-                        } else {
-                            reject(mapCopilotError(new Error('Unknown session error')));
-                        }
-                        break;
+        try {
+            // Handle tool choice - emit warning if unsupported
+            if (options.toolChoice) {
+                const toolChoiceResult = mapToolChoiceToCopilotFormat(options.toolChoice);
+                if (!toolChoiceResult.supported && toolChoiceResult.warning) {
+                    warnings.push({
+                        type: 'unsupported',
+                        feature: 'toolChoice',
+                        details: toolChoiceResult.warning,
+                    });
                 }
-            });
+            }
 
-            // Send the prompt
-            session.send({ prompt }).catch((error) => {
-                unsubscribe();
-                session.destroy().catch(() => {
-                    // Ignore cleanup errors
+            // Map AI SDK prompt to Copilot format
+            const prompt = mapPromptToCopilotFormat(options.prompt);
+
+            // Set up abort signal handling
+            if (options.abortSignal) {
+                options.abortSignal.addEventListener(
+                    'abort',
+                    async () => {
+                        try {
+                            await session.abort();
+                        } catch {
+                            // Ignore abort errors
+                        }
+                    },
+                    { once: true }
+                );
+            }
+
+            // Create reasoning context for non-streaming (auto-detect from events)
+            const reasoningContext = createReasoningContext();
+
+            // Collect response via events
+            return new Promise<LanguageModelV3GenerateResult>((resolve, reject) => {
+                const content: LanguageModelV3Content[] = [];
+                let usage: LanguageModelV3Usage | undefined;
+                let finishReason: LanguageModelV3FinishReason | undefined;
+                let responseId: string | undefined;
+                let responseTimestamp: Date | undefined;
+                const textParts: string[] = [];
+                const toolCalls: LanguageModelV3ToolCall[] = [];
+
+                const unsubscribe = session.on((event: SessionEvent) => {
+                    switch (event.type) {
+                        case 'assistant.message':
+                            // Accumulate text content
+                            if ('content' in event.data && typeof event.data.content === 'string') {
+                                textParts.push(event.data.content);
+                            }
+                            responseId = event.id;
+                            responseTimestamp = new Date(event.timestamp);
+
+                            // Handle tool requests (return-to-caller model)
+                            const toolRequests = event.data.toolRequests as ToolRequest[] | undefined;
+                            if (toolRequests && toolRequests.length > 0) {
+                                for (const req of toolRequests) {
+                                    toolCalls.push({
+                                        type: 'tool-call',
+                                        toolCallId: req.toolCallId,
+                                        toolName: req.name,
+                                        input: JSON.stringify(req.arguments ?? {}),
+                                        providerExecuted: false,
+                                    });
+                                }
+                            }
+                            break;
+
+                        case 'assistant.reasoning':
+                            // Capture reasoning for final response (auto-detected)
+                            reasoningContext.accumulatedReasoning = event.data.content as string;
+                            reasoningContext.reasoningBlockId = event.data.reasoningId as string;
+                            break;
+
+                        case 'assistant.turn_end':
+                            // Turn complete - finalize response
+                            unsubscribe();
+
+                            // Include reasoning content if available (always include per DP-6)
+                            const reasoningContent = createReasoningContent(reasoningContext);
+                            if (reasoningContent) {
+                                content.push(reasoningContent as LanguageModelV3Content);
+                            }
+
+                            // Combine all text parts into single content
+                            if (textParts.length > 0) {
+                                content.push({ type: 'text', text: textParts.join('') });
+                            }
+
+                            // Add tool calls to content
+                            for (const toolCall of toolCalls) {
+                                content.push(toolCall);
+                            }
+
+                            // Set finish reason based on whether tools were called
+                            finishReason = toolCalls.length > 0
+                                ? { unified: 'tool-calls', raw: 'tool_calls' }
+                                : { unified: 'stop', raw: 'complete' };
+
+                            // Cleanup session after this turn
+                            session.destroy().catch(() => {
+                                // Ignore cleanup errors
+                            });
+
+                            resolve({
+                                content,
+                                finishReason: finishReason ?? {
+                                    unified: 'stop',
+                                    raw: 'unknown',
+                                },
+                                usage: usage ?? {
+                                    inputTokens: {
+                                        total: undefined,
+                                        noCache: undefined,
+                                        cacheRead: undefined,
+                                        cacheWrite: undefined,
+                                    },
+                                    outputTokens: {
+                                        total: undefined,
+                                        text: undefined,
+                                        reasoning: undefined,
+                                    },
+                                },
+                                warnings,
+                                request: { body: prompt },
+                                response: {
+                                    id: responseId ?? crypto.randomUUID(),
+                                    timestamp: responseTimestamp ?? new Date(),
+                                    modelId: this.modelId,
+                                },
+                            });
+                            break;
+
+                        case 'session.error':
+                            unsubscribe();
+                            session.destroy().catch(() => {
+                                // Ignore cleanup errors
+                            });
+
+                            if ('message' in event.data) {
+                                reject(mapCopilotError(new Error(event.data.message as string)));
+                            } else {
+                                reject(mapCopilotError(new Error('Unknown session error')));
+                            }
+                            break;
+                    }
                 });
-                reject(mapCopilotError(error));
+
+                // Send the prompt
+                session.send({ prompt }).catch((error) => {
+                    unsubscribe();
+                    session.destroy().catch(() => {
+                        // Ignore cleanup errors
+                    });
+                    reject(mapCopilotError(error));
+                });
             });
-        });
+        } finally {
+            // Release client reference
+            this.releaseClient();
+        }
     }
 
     async doStream(
         options: LanguageModelV3CallOptions
     ): Promise<LanguageModelV3StreamResult> {
-        const session = await this.ensureSession(true);
+        const ctx = createRequestContext(this.modelId);
+        this.logger.info(`[${ctx.requestId}] Starting doStream for ${this.modelId}`);
+
         const warnings: SharedV3Warning[] = [];
+
+        // Handle structured output (system prompt injection - only viable approach)
+        let structuredOutputAppend: string | undefined;
+        if (options.responseFormat?.type === 'json' && options.responseFormat.schema) {
+            const structuredResult = processStructuredOutput({
+                hasSchema: true,
+                schema: options.responseFormat.schema,
+                name: options.responseFormat.name,
+                description: options.responseFormat.description,
+            });
+            warnings.push(...structuredResult.warnings);
+            structuredOutputAppend = structuredResult.systemMessageAppend;
+        }
+
+        // Get per-call options
+        const callOptions = options.providerOptions?.copilot as CopilotCallOptions | undefined;
+
+        // Acquire client and create session with all Phase 4 features
+        const client = await this.ensureClient();
+        const session = await this.ensureSession(client, true, callOptions, structuredOutputAppend);
+
+        // Handle tool choice - emit warning if unsupported
+        if (options.toolChoice) {
+            const toolChoiceResult = mapToolChoiceToCopilotFormat(options.toolChoice);
+            if (!toolChoiceResult.supported && toolChoiceResult.warning) {
+                warnings.push({
+                    type: 'unsupported',
+                    feature: 'toolChoice',
+                    details: toolChoiceResult.warning,
+                });
+            }
+        }
 
         // Map AI SDK prompt to Copilot format
         const prompt = mapPromptToCopilotFormat(options.prompt);
@@ -217,6 +481,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
 
         // Capture references for closure
         const modelId = this.modelId;
+        const logger = this.logger;
+        const releaseClient = () => this.releaseClient();
 
         // Track abort listener for cleanup
         let abortListener: (() => void) | undefined;
@@ -229,6 +495,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                     if (options.abortSignal.aborted) {
                         const abortError = new Error('Request aborted');
                         abortError.name = 'AbortError';
+                        releaseClient();
                         controller.error(abortError);
                         return;
                     }
@@ -267,7 +534,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                                 break;
                             }
 
-                            case 'turn.end': {
+                            case 'assistant.turn_end': {
                                 // Close any open blocks that weren't explicitly closed
                                 if (context.textStarted && context.textBlockId) {
                                     controller.enqueue({ type: 'text-end', id: context.textBlockId });
@@ -285,7 +552,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                                 });
                                 controller.enqueue({
                                     type: 'finish',
-                                    finishReason: mapFinishReason(),
+                                    finishReason: mapFinishReason(undefined, context.hasToolCalls),
                                     usage: context.usage ?? getDefaultUsage(),
                                 });
 
@@ -295,6 +562,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                                     options.abortSignal.removeEventListener('abort', abortListener);
                                 }
                                 session.destroy().catch(() => { });
+                                releaseClient();
+                                logger.info(`[${ctx.requestId}] doStream completed`);
                                 controller.close();
                                 break;
                             }
@@ -312,6 +581,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                                         options.abortSignal.removeEventListener('abort', abortListener);
                                     }
                                     session.destroy().catch(() => { });
+                                    releaseClient();
+                                    logger.error(`[${ctx.requestId}] doStream failed: ${errorMessage}`);
                                     controller.error(mapCopilotError(new Error(errorMessage)));
                                 }
                                 break;
@@ -326,6 +597,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                                 const abortError = new Error(reason || 'Request aborted');
                                 abortError.name = 'AbortError';
                                 session.destroy().catch(() => { });
+                                releaseClient();
                                 controller.error(abortError);
                                 break;
                             }
@@ -336,6 +608,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                             options.abortSignal.removeEventListener('abort', abortListener);
                         }
                         session.destroy().catch(() => { });
+                        releaseClient();
+                        logger.error(`[${ctx.requestId}] doStream error: ${error}`);
                         controller.error(mapCopilotError(error));
                     }
                 });
@@ -347,6 +621,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                         options.abortSignal.removeEventListener('abort', abortListener);
                     }
                     session.destroy().catch(() => { });
+                    releaseClient();
+                    logger.error(`[${ctx.requestId}] doStream send failed: ${error}`);
                     controller.error(mapCopilotError(error));
                 });
             },
@@ -357,6 +633,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
                 }
                 session.abort().catch(() => { });
                 session.destroy().catch(() => { });
+                releaseClient();
             },
         });
 
@@ -369,12 +646,12 @@ export class CopilotLanguageModel implements LanguageModelV3 {
     /**
      * Cleanup resources.
      * Call this when you're done using the model to free up CLI resources.
+     * Note: If using a shared client manager from provider, use provider.dispose() instead.
      */
     async dispose(): Promise<void> {
         if (this.session) {
             await this.session.destroy();
             this.session = undefined;
-            this.sessionPromise = undefined;
         }
         if (this.client) {
             await this.client.stop();

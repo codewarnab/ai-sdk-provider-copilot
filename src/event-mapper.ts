@@ -10,8 +10,18 @@ import type {
     LanguageModelV3Usage,
     LanguageModelV3FinishReason,
     SharedV3Warning,
+    LanguageModelV3ToolCall,
 } from '@ai-sdk/provider';
 import type { SessionEvent } from '@github/copilot-sdk';
+
+/**
+ * Tool request from Copilot SDK assistant.message event
+ */
+export interface ToolRequest {
+    toolCallId: string;
+    name: string;
+    arguments?: unknown;
+}
 
 /**
  * State tracker for streaming context.
@@ -36,6 +46,12 @@ export interface StreamContext {
 
     /** Warnings accumulated during stream */
     warnings: SharedV3Warning[];
+
+    /** Tool calls collected from assistant.message events */
+    toolCalls: LanguageModelV3ToolCall[];
+
+    /** Whether any tool calls were made (affects finish reason) */
+    hasToolCalls: boolean;
 }
 
 /**
@@ -46,6 +62,8 @@ export function createStreamContext(warnings: SharedV3Warning[] = []): StreamCon
         textStarted: false,
         reasoningStarted: false,
         warnings,
+        toolCalls: [],
+        hasToolCalls: false,
     };
 }
 
@@ -100,6 +118,24 @@ export function mapEventToStreamParts(
                     type: 'text-end',
                     id: context.textBlockId,
                 });
+            }
+
+            // Handle tool requests from assistant.message (return-to-caller model)
+            // The toolRequests field contains tool calls BEFORE execution
+            const toolRequests = event.data.toolRequests as ToolRequest[] | undefined;
+            if (toolRequests && toolRequests.length > 0) {
+                for (const req of toolRequests) {
+                    const toolCall: LanguageModelV3ToolCall = {
+                        type: 'tool-call',
+                        toolCallId: req.toolCallId,
+                        toolName: req.name,
+                        input: JSON.stringify(req.arguments ?? {}),
+                        providerExecuted: false, // Caller will execute (return-to-caller model)
+                    };
+                    parts.push(toolCall);
+                    context.toolCalls.push(toolCall);
+                    context.hasToolCalls = true;
+                }
             }
             break;
         }
@@ -171,8 +207,17 @@ export function mapUsageEvent(data: Record<string, unknown>): LanguageModelV3Usa
 
 /**
  * Maps Copilot turn end to AI SDK V3 finish reason.
+ *
+ * @param rawReason - Optional raw reason string
+ * @param hasToolCalls - Whether tool calls were made during this turn
  */
-export function mapFinishReason(rawReason?: string): LanguageModelV3FinishReason {
+export function mapFinishReason(rawReason?: string, hasToolCalls = false): LanguageModelV3FinishReason {
+    if (hasToolCalls) {
+        return {
+            unified: 'tool-calls',
+            raw: rawReason ?? 'tool_calls',
+        };
+    }
     return {
         unified: 'stop',
         raw: rawReason ?? 'complete',

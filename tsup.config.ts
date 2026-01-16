@@ -1,10 +1,11 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-    entry: ['src/index.ts'],
+    entry: ['src/index.ts', 'src/cache/index.ts', 'src/propagation/index.ts'],
     format: ['cjs', 'esm'],
-    dts: false, // TODO: Enable when @github/copilot-sdk ships proper .d.ts files
+    dts: true,
     clean: true,
     sourcemap: true,
-    splitting: false,
+    splitting: true,
+    treeshake: true,
 });

@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { randomUUID } from 'node:crypto';
 import {
     createStreamContext,
     mapEventToStreamParts,
@@ -8,14 +7,7 @@ import {
     getDefaultUsage,
     type StreamContext,
 } from '../event-mapper.js';
-
-// Define SessionEvent type inline since the SDK doesn't export types
-interface SessionEvent {
-    id: string;
-    type: string;
-    timestamp: number;
-    data: Record<string, unknown>;
-}
+import type { SessionEvent } from '@github/copilot-sdk';
 
 // Mock crypto.randomUUID for predictable tests
 vi.mock('node:crypto', () => ({
@@ -26,9 +18,10 @@ function createMockEvent(type: string, data: Record<string, unknown> = {}): Sess
     return {
         id: 'event-123',
         type,
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
+        parentId: null,
         data,
-    };
+    } as SessionEvent;
 }
 
 describe('event-mapper', () => {
@@ -47,6 +40,8 @@ describe('event-mapper', () => {
             expect(context.usage).toBeUndefined();
             expect(context.turnId).toBeUndefined();
             expect(context.warnings).toEqual([]);
+            expect(context.toolCalls).toEqual([]);
+            expect(context.hasToolCalls).toBe(false);
         });
 
         it('should accept initial warnings', () => {
@@ -155,6 +150,86 @@ describe('event-mapper', () => {
                 const parts = mapEventToStreamParts(event, context);
 
                 expect(parts).toEqual([]);
+            });
+
+            it('should emit tool-call for toolRequests in assistant.message', () => {
+                const event = createMockEvent('assistant.message', {
+                    content: '',
+                    toolRequests: [
+                        {
+                            toolCallId: 'call-123',
+                            name: 'getWeather',
+                            arguments: { location: 'Seattle' },
+                        },
+                    ],
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toHaveLength(1);
+                expect(parts[0]).toEqual({
+                    type: 'tool-call',
+                    toolCallId: 'call-123',
+                    toolName: 'getWeather',
+                    input: '{"location":"Seattle"}',
+                    providerExecuted: false,
+                });
+                expect(context.hasToolCalls).toBe(true);
+                expect(context.toolCalls).toHaveLength(1);
+            });
+
+            it('should handle multiple tool requests in single message', () => {
+                const event = createMockEvent('assistant.message', {
+                    content: '',
+                    toolRequests: [
+                        { toolCallId: 'call-1', name: 'tool1', arguments: { a: 1 } },
+                        { toolCallId: 'call-2', name: 'tool2', arguments: { b: 2 } },
+                    ],
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toHaveLength(2);
+                expect(parts[0]).toMatchObject({ type: 'tool-call', toolCallId: 'call-1', toolName: 'tool1' });
+                expect(parts[1]).toMatchObject({ type: 'tool-call', toolCallId: 'call-2', toolName: 'tool2' });
+                expect(context.toolCalls).toHaveLength(2);
+            });
+
+            it('should handle empty arguments for tool request', () => {
+                const event = createMockEvent('assistant.message', {
+                    content: '',
+                    toolRequests: [
+                        { toolCallId: 'call-123', name: 'noArgs' },
+                    ],
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts[0]).toEqual({
+                    type: 'tool-call',
+                    toolCallId: 'call-123',
+                    toolName: 'noArgs',
+                    input: '{}',
+                    providerExecuted: false,
+                });
+            });
+
+            it('should emit text-end before tool-calls when both present', () => {
+                context.textStarted = true;
+                context.textBlockId = 'msg-1';
+
+                const event = createMockEvent('assistant.message', {
+                    content: 'Let me check the weather',
+                    toolRequests: [
+                        { toolCallId: 'call-123', name: 'getWeather', arguments: {} },
+                    ],
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toHaveLength(2);
+                expect(parts[0]).toEqual({ type: 'text-end', id: 'msg-1' });
+                expect(parts[1]).toMatchObject({ type: 'tool-call' });
             });
         });
 
@@ -308,6 +383,24 @@ describe('event-mapper', () => {
             expect(reason).toEqual({
                 unified: 'stop',
                 raw: 'complete',
+            });
+        });
+
+        it('should return tool-calls finish reason when hasToolCalls is true', () => {
+            const reason = mapFinishReason(undefined, true);
+
+            expect(reason).toEqual({
+                unified: 'tool-calls',
+                raw: 'tool_calls',
+            });
+        });
+
+        it('should use raw reason with tool-calls when both provided', () => {
+            const reason = mapFinishReason('custom_reason', true);
+
+            expect(reason).toEqual({
+                unified: 'tool-calls',
+                raw: 'custom_reason',
             });
         });
     });
