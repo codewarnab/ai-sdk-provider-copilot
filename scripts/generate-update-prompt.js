@@ -471,7 +471,20 @@ async function main() {
     const aiDiff = getDiff(CONFIG.aiPackagePath, CONFIG.aiPackageIncludePaths);
     const aiLog = getCommitLog(CONFIG.aiPackagePath, CONFIG.aiPackageIncludePaths);
 
-    // Generate prompt
+    // Check if there are any changes
+    const copilotChanges = copilotSdkLog ? copilotSdkLog.split('\n').filter(l => l.trim()).length : 0;
+    const aiChanges = aiLog ? aiLog.split('\n').filter(l => l.trim()).length : 0;
+
+    // If no changes, don't create the file
+    if (copilotChanges === 0 && aiChanges === 0) {
+        console.log(`✅ Everything is up to date! No upstream changes detected.
+
+No prompt.md file created - nothing to update.
+`);
+        process.exit(0);
+    }
+
+    // Generate prompt only if there are changes
     console.log('📝 Generating prompt.md...\n');
     const promptContent = generatePrompt(copilotSdkDiff, copilotSdkLog, aiDiff, aiLog, options);
 
@@ -481,16 +494,7 @@ async function main() {
 
     console.log(`✅ Generated: ${outputPath}`);
 
-    // Summary
-    const copilotChanges = copilotSdkLog ? copilotSdkLog.split('\n').filter(l => l.trim()).length : 0;
-    const aiChanges = aiLog ? aiLog.split('\n').filter(l => l.trim()).length : 0;
-
-    if (copilotChanges === 0 && aiChanges === 0) {
-        console.log(`
-✅ Everything is up to date! No upstream changes detected.
-`);
-    } else {
-        console.log(`
+    console.log(`
 📈 Upstream Changes Detected:
    - Copilot SDK: ${copilotChanges} new commit(s)
    - AI SDK: ${aiChanges} new commit(s)
@@ -501,7 +505,6 @@ Next steps:
    2. Send it to an AI agent for analysis and updates
    3. Pull the upstream changes after applying updates
 `);
-    }
 }
 
 // Run
