@@ -10,7 +10,7 @@
 import { createCopilotProvider } from '../src/copilot-provider.js';
 import { createMemoryCache, wrapWithCache } from '../src/cache/index.js';
 import { generateText } from 'ai';
-import dotenv from 'dotenv';
+import * as dotenv from 'dotenv';
 
 dotenv.config();
 
