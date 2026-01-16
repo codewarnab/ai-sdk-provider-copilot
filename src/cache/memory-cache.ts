@@ -47,12 +47,12 @@ export function createMemoryCache(options: MemoryCacheOptions = {}): CacheAdapte
         let oldestKey: string | undefined;
         let oldestTime = Infinity;
 
-        for (const [key, entry] of cache.entries()) {
+        cache.forEach((entry, key) => {
             if (entry.insertedAt < oldestTime) {
                 oldestTime = entry.insertedAt;
                 oldestKey = key;
             }
-        }
+        });
 
         if (oldestKey) {
             cache.delete(oldestKey);

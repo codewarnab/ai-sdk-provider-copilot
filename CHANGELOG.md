@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.1.2] (2026-01-16)
+
+### Features
+
+*   **examples:** Added MCP server example with DeepWiki for GitHub code search
+
+### Bug Fixes
+
+*   **examples:** Fixed dotenv import in caching example (use namespace import)
+
 ### [0.1.1] (2026-01-16)
 
 ### Docs
