@@ -167,15 +167,17 @@ describe('withTiming', () => {
     });
 
     it('should measure failed operations', async () => {
-        const fn = vi.fn().mockImplementation(async () => {
-            await new Promise(resolve => setTimeout(resolve, 50));
-            throw new Error('fail');
-        });
+        const error = new Error('fail');
+        const fn = vi.fn().mockRejectedValue(error);
 
-        const promise = withTiming(fn);
-        await vi.advanceTimersByTimeAsync(50);
-
-        await expect(promise).rejects.toThrow('fail');
+        let caughtError: Error | null = null;
+        try {
+            await withTiming(fn);
+        } catch (e) {
+            caughtError = e as Error;
+        }
+        expect(caughtError).toBe(error);
+        expect(caughtError?.message).toBe('fail');
     });
 
     it('should log timing on success when logger and operation provided', async () => {

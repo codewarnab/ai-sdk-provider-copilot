@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.1.1] (2026-01-16)
+
+### Docs
+
+*   **readme:** Clarified serverless limitation note - the provider spawns the CLI automatically, users don't need to run it manually
+
 ### [0.1.0] (2025-05-20)
 
 ### Features

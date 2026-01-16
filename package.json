@@ -1,9 +1,17 @@
 {
   "name": "ai-sdk-provider-copilot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Community AI SDK provider for GitHub Copilot CLI",
-  "author": "",
+  "author": "codewarnab <dev@codewarnab.in>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codewarnab/ai-sdk-provider-copilot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codewarnab/ai-sdk-provider-copilot/issues"
+  },
+  "homepage": "https://github.com/codewarnab/ai-sdk-provider-copilot#readme",
   "keywords": [
     "ai",
     "vercel",

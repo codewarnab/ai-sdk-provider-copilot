@@ -219,14 +219,19 @@ describe('withRetry', () => {
 
         const fn = vi.fn().mockRejectedValue(retryableError);
 
-        const promise = withRetry(fn, { maxRetries: 2, jitter: 0 });
+        let caughtError: Error | null = null;
+        try {
+            // Use real timers for this test to avoid async timing issues
+            vi.useRealTimers();
+            await withRetry(fn, { maxRetries: 2, initialDelayMs: 1, jitter: 0 });
+        } catch (error) {
+            caughtError = error as Error;
+        } finally {
+            vi.useFakeTimers();
+        }
 
-        // Advance through all retry delays
-        await vi.advanceTimersByTimeAsync(100);
-        await vi.advanceTimersByTimeAsync(200);
-        await vi.advanceTimersByTimeAsync(400);
-
-        await expect(promise).rejects.toThrow('Always fails');
+        expect(caughtError).not.toBeNull();
+        expect(caughtError?.message).toBe('Always fails');
         // Initial + 2 retries = 3 calls
         expect(fn).toHaveBeenCalledTimes(3);
     });

@@ -11,7 +11,7 @@ export function generateCacheKey(options: CacheKeyOptions): string {
         mt: options.maxTokens,
         t: options.temperature,
         tp: options.topP,
-        tools: options.tools?.map((t) => normalizeObject(t)).sort(),
+        tools: options.tools?.map((t) => normalizeObject(t)),
         sm: options.systemMessageHash,
     };
 

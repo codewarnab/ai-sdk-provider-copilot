@@ -2,7 +2,7 @@
 
 Community AI SDK provider for GitHub Copilot CLI.
 
-> ⚠️ **Note**: This provider requires the Copilot CLI to be running locally. It will **not work in serverless environments** (Vercel, AWS Lambda, etc.) because the Copilot SDK spawns a local CLI process.
+> ⚠️ **Note**: This provider spawns a local Copilot CLI process and will **not work in serverless environments** (Vercel, AWS Lambda, etc.). Use it in long-running environments like local development, Docker containers, or traditional servers.
 
 ## Installation
 
