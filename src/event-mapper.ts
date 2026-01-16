@@ -24,6 +24,47 @@ export interface ToolRequest {
 }
 
 /**
+ * Session usage info from session.usage_info event.
+ */
+export interface SessionUsageInfo {
+    tokenLimit: number;
+    currentTokens: number;
+    messagesLength: number;
+}
+
+/**
+ * Compaction result from session.compaction_complete event.
+ */
+export interface CompactionResult {
+    success: boolean;
+    error?: string;
+    preCompactionTokens?: number;
+    postCompactionTokens?: number;
+    preCompactionMessagesLength?: number;
+    messagesRemoved?: number;
+    tokensRemoved?: number;
+    summaryContent?: string;
+    compactionTokensUsed?: {
+        input: number;
+        output: number;
+        cachedInput: number;
+    };
+}
+
+/**
+ * Subagent state tracking.
+ */
+export interface SubagentInfo {
+    toolCallId: string;
+    agentName: string;
+    agentDisplayName?: string;
+    agentDescription?: string;
+    status: 'started' | 'completed' | 'failed' | 'selected';
+    error?: string;
+    tools?: string[] | null;
+}
+
+/**
  * State tracker for streaming context.
  * Maintains IDs and state across multiple events for a single stream.
  */
@@ -52,6 +93,18 @@ export interface StreamContext {
 
     /** Whether any tool calls were made (affects finish reason) */
     hasToolCalls: boolean;
+
+    /** Session usage info from session.usage_info event */
+    sessionUsageInfo?: SessionUsageInfo;
+
+    /** Whether context compaction is in progress */
+    compactionInProgress: boolean;
+
+    /** Result of the last compaction operation */
+    compactionResult?: CompactionResult;
+
+    /** Active subagents tracked during the stream */
+    subagents: Map<string, SubagentInfo>;
 }
 
 /**
@@ -64,6 +117,8 @@ export function createStreamContext(warnings: SharedV3Warning[] = []): StreamCon
         warnings,
         toolCalls: [],
         hasToolCalls: false,
+        compactionInProgress: false,
+        subagents: new Map(),
     };
 }
 
@@ -179,6 +234,100 @@ export function mapEventToStreamParts(
         case 'assistant.usage': {
             // Store usage for finish event
             context.usage = mapUsageEvent(event.data);
+            break;
+        }
+
+        case 'session.usage_info': {
+            // Track session token limits and usage for observability
+            context.sessionUsageInfo = {
+                tokenLimit: event.data.tokenLimit as number,
+                currentTokens: event.data.currentTokens as number,
+                messagesLength: event.data.messagesLength as number,
+            };
+            break;
+        }
+
+        case 'session.compaction_start': {
+            // Track when context compaction begins
+            context.compactionInProgress = true;
+            break;
+        }
+
+        case 'session.compaction_complete': {
+            // Track compaction results
+            context.compactionInProgress = false;
+            context.compactionResult = {
+                success: event.data.success as boolean,
+                error: event.data.error as string | undefined,
+                preCompactionTokens: event.data.preCompactionTokens as number | undefined,
+                postCompactionTokens: event.data.postCompactionTokens as number | undefined,
+                preCompactionMessagesLength: event.data.preCompactionMessagesLength as number | undefined,
+                messagesRemoved: event.data.messagesRemoved as number | undefined,
+                tokensRemoved: event.data.tokensRemoved as number | undefined,
+                summaryContent: event.data.summaryContent as string | undefined,
+                compactionTokensUsed: event.data.compactionTokensUsed as {
+                    input: number;
+                    output: number;
+                    cachedInput: number;
+                } | undefined,
+            };
+            break;
+        }
+
+        case 'subagent.started': {
+            const toolCallId = event.data.toolCallId as string;
+            context.subagents.set(toolCallId, {
+                toolCallId,
+                agentName: event.data.agentName as string,
+                agentDisplayName: event.data.agentDisplayName as string,
+                agentDescription: event.data.agentDescription as string,
+                status: 'started',
+            });
+            break;
+        }
+
+        case 'subagent.completed': {
+            const toolCallId = event.data.toolCallId as string;
+            const existing = context.subagents.get(toolCallId);
+            if (existing) {
+                existing.status = 'completed';
+            } else {
+                context.subagents.set(toolCallId, {
+                    toolCallId,
+                    agentName: event.data.agentName as string,
+                    status: 'completed',
+                });
+            }
+            break;
+        }
+
+        case 'subagent.failed': {
+            const toolCallId = event.data.toolCallId as string;
+            const existing = context.subagents.get(toolCallId);
+            if (existing) {
+                existing.status = 'failed';
+                existing.error = event.data.error as string;
+            } else {
+                context.subagents.set(toolCallId, {
+                    toolCallId,
+                    agentName: event.data.agentName as string,
+                    status: 'failed',
+                    error: event.data.error as string,
+                });
+            }
+            break;
+        }
+
+        case 'subagent.selected': {
+            // subagent.selected uses agentName as identifier (no toolCallId)
+            const agentName = event.data.agentName as string;
+            context.subagents.set(agentName, {
+                toolCallId: agentName, // Use agentName as key for selected events
+                agentName,
+                agentDisplayName: event.data.agentDisplayName as string,
+                status: 'selected',
+                tools: event.data.tools as string[] | null,
+            });
             break;
         }
     }

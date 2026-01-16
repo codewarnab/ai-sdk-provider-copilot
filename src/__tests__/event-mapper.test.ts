@@ -6,6 +6,9 @@ import {
     mapFinishReason,
     getDefaultUsage,
     type StreamContext,
+    type SessionUsageInfo,
+    type CompactionResult,
+    type SubagentInfo,
 } from '../event-mapper.js';
 import type { SessionEvent } from '@github/copilot-sdk';
 
@@ -42,6 +45,11 @@ describe('event-mapper', () => {
             expect(context.warnings).toEqual([]);
             expect(context.toolCalls).toEqual([]);
             expect(context.hasToolCalls).toBe(false);
+            expect(context.sessionUsageInfo).toBeUndefined();
+            expect(context.compactionInProgress).toBe(false);
+            expect(context.compactionResult).toBeUndefined();
+            expect(context.subagents).toBeInstanceOf(Map);
+            expect(context.subagents.size).toBe(0);
         });
 
         it('should accept initial warnings', () => {
@@ -320,6 +328,271 @@ describe('event-mapper', () => {
                         reasoning: undefined,
                     },
                 });
+            });
+        });
+
+        describe('session.usage_info events', () => {
+            it('should store session usage info in context', () => {
+                const event = createMockEvent('session.usage_info', {
+                    tokenLimit: 100000,
+                    currentTokens: 5000,
+                    messagesLength: 10,
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                expect(context.sessionUsageInfo).toEqual({
+                    tokenLimit: 100000,
+                    currentTokens: 5000,
+                    messagesLength: 10,
+                });
+            });
+
+            it('should update session usage info on subsequent events', () => {
+                const event1 = createMockEvent('session.usage_info', {
+                    tokenLimit: 100000,
+                    currentTokens: 5000,
+                    messagesLength: 10,
+                });
+                mapEventToStreamParts(event1, context);
+
+                const event2 = createMockEvent('session.usage_info', {
+                    tokenLimit: 100000,
+                    currentTokens: 7500,
+                    messagesLength: 15,
+                });
+                const parts = mapEventToStreamParts(event2, context);
+
+                expect(parts).toEqual([]);
+                expect(context.sessionUsageInfo).toEqual({
+                    tokenLimit: 100000,
+                    currentTokens: 7500,
+                    messagesLength: 15,
+                });
+            });
+        });
+
+        describe('session.compaction_start events', () => {
+            it('should set compactionInProgress to true', () => {
+                const event = createMockEvent('session.compaction_start', {});
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                expect(context.compactionInProgress).toBe(true);
+            });
+        });
+
+        describe('session.compaction_complete events', () => {
+            it('should handle successful compaction', () => {
+                // First mark compaction as started
+                context.compactionInProgress = true;
+
+                const event = createMockEvent('session.compaction_complete', {
+                    success: true,
+                    preCompactionTokens: 50000,
+                    postCompactionTokens: 30000,
+                    preCompactionMessagesLength: 100,
+                    messagesRemoved: 20,
+                    tokensRemoved: 20000,
+                    summaryContent: 'Conversation summarized',
+                    compactionTokensUsed: {
+                        input: 1000,
+                        output: 500,
+                        cachedInput: 200,
+                    },
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                expect(context.compactionInProgress).toBe(false);
+                expect(context.compactionResult).toEqual({
+                    success: true,
+                    error: undefined,
+                    preCompactionTokens: 50000,
+                    postCompactionTokens: 30000,
+                    preCompactionMessagesLength: 100,
+                    messagesRemoved: 20,
+                    tokensRemoved: 20000,
+                    summaryContent: 'Conversation summarized',
+                    compactionTokensUsed: {
+                        input: 1000,
+                        output: 500,
+                        cachedInput: 200,
+                    },
+                });
+            });
+
+            it('should handle failed compaction', () => {
+                context.compactionInProgress = true;
+
+                const event = createMockEvent('session.compaction_complete', {
+                    success: false,
+                    error: 'Compaction failed due to timeout',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                expect(context.compactionInProgress).toBe(false);
+                expect(context.compactionResult).toEqual({
+                    success: false,
+                    error: 'Compaction failed due to timeout',
+                    preCompactionTokens: undefined,
+                    postCompactionTokens: undefined,
+                    preCompactionMessagesLength: undefined,
+                    messagesRemoved: undefined,
+                    tokensRemoved: undefined,
+                    summaryContent: undefined,
+                    compactionTokensUsed: undefined,
+                });
+            });
+        });
+
+        describe('subagent.started events', () => {
+            it('should track subagent started state', () => {
+                const event = createMockEvent('subagent.started', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    agentDescription: 'Reviews code for quality',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                expect(context.subagents.size).toBe(1);
+                const subagent = context.subagents.get('call-123');
+                expect(subagent).toEqual({
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    agentDescription: 'Reviews code for quality',
+                    status: 'started',
+                });
+            });
+        });
+
+        describe('subagent.completed events', () => {
+            it('should update existing subagent to completed status', () => {
+                // First start the subagent
+                context.subagents.set('call-123', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    agentDescription: 'Reviews code for quality',
+                    status: 'started',
+                });
+
+                const event = createMockEvent('subagent.completed', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('call-123');
+                expect(subagent?.status).toBe('completed');
+            });
+
+            it('should create new subagent entry if not exists', () => {
+                const event = createMockEvent('subagent.completed', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('call-123');
+                expect(subagent).toEqual({
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    status: 'completed',
+                });
+            });
+        });
+
+        describe('subagent.failed events', () => {
+            it('should update existing subagent to failed status with error', () => {
+                context.subagents.set('call-123', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    agentDescription: 'Reviews code for quality',
+                    status: 'started',
+                });
+
+                const event = createMockEvent('subagent.failed', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    error: 'Timeout while processing',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('call-123');
+                expect(subagent?.status).toBe('failed');
+                expect(subagent?.error).toBe('Timeout while processing');
+            });
+
+            it('should create new subagent entry with failed status if not exists', () => {
+                const event = createMockEvent('subagent.failed', {
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    error: 'Agent not available',
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('call-123');
+                expect(subagent).toEqual({
+                    toolCallId: 'call-123',
+                    agentName: 'code-reviewer',
+                    status: 'failed',
+                    error: 'Agent not available',
+                });
+            });
+        });
+
+        describe('subagent.selected events', () => {
+            it('should track selected subagent with tools', () => {
+                const event = createMockEvent('subagent.selected', {
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    tools: ['read_file', 'grep_search', 'semantic_search'],
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('code-reviewer');
+                expect(subagent).toEqual({
+                    toolCallId: 'code-reviewer',
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    status: 'selected',
+                    tools: ['read_file', 'grep_search', 'semantic_search'],
+                });
+            });
+
+            it('should handle selected subagent with null tools', () => {
+                const event = createMockEvent('subagent.selected', {
+                    agentName: 'code-reviewer',
+                    agentDisplayName: 'Code Reviewer',
+                    tools: null,
+                });
+
+                const parts = mapEventToStreamParts(event, context);
+
+                expect(parts).toEqual([]);
+                const subagent = context.subagents.get('code-reviewer');
+                expect(subagent?.tools).toBeNull();
             });
         });
     });
