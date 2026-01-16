@@ -1,3 +1,12 @@
+/**
+ * Caching Example
+ *
+ * Demonstrates response caching to improve performance and reduce
+ * API calls for repeated prompts.
+ *
+ * Run with: npx tsx examples/caching.ts
+ */
+
 import { createCopilotProvider } from '../src/copilot-provider.js';
 import { createMemoryCache, wrapWithCache } from '../src/cache/index.js';
 import { generateText } from 'ai';

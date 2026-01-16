@@ -5,6 +5,7 @@
  * - Lazy initialization on first use
  * - Reference counting for safe cleanup
  * - Graceful disposal with retry
+ * - Automatic Windows CLI path resolution
  * 
  * @module client-manager
  */
@@ -13,6 +14,37 @@ import { CopilotClient } from '@github/copilot-sdk';
 import type { CopilotClientOptions } from '@github/copilot-sdk';
 import type { Logger, CopilotProviderOptions } from './types.js';
 import { getLogger } from './telemetry.js';
+import { execSync } from 'child_process';
+import { existsSync } from 'fs';
+import { join } from 'path';
+
+/**
+ * Resolves the correct CLI path for the current platform.
+ * On Windows, finds the underlying .js file to avoid spawn issues with .cmd files.
+ * 
+ * @returns The resolved CLI path, or undefined to use SDK default
+ */
+function resolveCliPath(): string | undefined {
+    if (process.platform !== 'win32') {
+        // On Unix, default 'copilot' works fine
+        return undefined;
+    }
+
+    try {
+        // Get global npm modules path
+        const globalPath = execSync('npm root -g', { encoding: 'utf-8' }).trim();
+        const jsPath = join(globalPath, '@github', 'copilot', 'index.js');
+
+        if (existsSync(jsPath)) {
+            return jsPath;
+        }
+    } catch {
+        // Fall through to default
+    }
+
+    // Return undefined to let SDK try default behavior
+    return undefined;
+}
 
 /**
  * Connection state of the client manager.
@@ -162,8 +194,11 @@ export class ClientManager {
         this.logger.info('Creating new CopilotClient');
 
         try {
+            // Use provided cliPath, or auto-resolve on Windows
+            const effectiveCliPath = this.options.cliPath ?? resolveCliPath();
+
             const clientOptions: Partial<CopilotClientOptions> = {
-                cliPath: this.options.cliPath,
+                cliPath: effectiveCliPath,
                 cliUrl: this.options.cliUrl,
                 cwd: this.options.cwd,
                 cliArgs: this.options.cliArgs,

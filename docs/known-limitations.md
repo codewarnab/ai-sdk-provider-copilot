@@ -172,11 +172,22 @@ The Copilot SDK requires Node.js APIs and **will not work** in Edge Runtime envi
 
 ---
 
-## Future Improvements
+## Now Implemented
 
-Features planned for future phases:
+These features are now available:
 
-- OpenTelemetry tracing integration
-- Session pooling for efficiency
-- Response caching
-- Health checks and connection monitoring
+- ✅ OpenTelemetry tracing integration
+- ✅ OpenTelemetry metrics integration
+- ✅ Session pooling for efficiency
+- ✅ Response caching
+- ✅ Health checks and connection monitoring
+- ✅ Retry with exponential backoff
+- ✅ Windows CLI auto-detection
+
+## Tool Calling with Custom Tools
+
+Custom tools defined via the AI SDK are now properly registered with the Copilot SDK. The model may use both:
+- Your custom tools (e.g., `weather`, `calculator`)
+- Copilot's built-in tools (e.g., `web_fetch`, `report_intent`)
+
+The built-in tools may take precedence for common tasks. Use `excludedTools` to disable specific built-in tools if needed.

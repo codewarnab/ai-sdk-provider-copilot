@@ -79,11 +79,13 @@ export {
 // Tool mapping utilities
 export {
     mapToolsToCopilotFormat,
+    mapToolsWithHandlers,
     mapToolChoiceToCopilotFormat,
     cleanJsonSchema,
     isFunctionTool,
     extractFunctionTools,
     type CopilotToolSchema,
+    type CopilotTool,
     type ToolChoiceResult,
 } from './tool-mapper.js';
 

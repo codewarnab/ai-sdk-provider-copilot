@@ -2,6 +2,19 @@
  * BYOK OpenAI Example
  *
  * Demonstrates using Bring Your Own Key (BYOK) with an OpenAI endpoint.
+ * 
+ * Set the OPENAI_API_KEY environment variable before running:
+ * 
+ * Windows (PowerShell):
+ *   $env:OPENAI_API_KEY = "sk-your-api-key"
+ * 
+ * Windows (CMD):
+ *   set OPENAI_API_KEY=sk-your-api-key
+ * 
+ * macOS / Linux:
+ *   export OPENAI_API_KEY="sk-your-api-key"
+ * 
+ * Then run: npx tsx examples/byok-openai.ts
  */
 
 import { createCopilotProvider } from '../src/index.js';
@@ -11,6 +24,11 @@ async function main() {
     // Ensure API key is set
     if (!process.env.OPENAI_API_KEY) {
         console.error('Error: OPENAI_API_KEY environment variable is required');
+        console.error('');
+        console.error('Set it first:');
+        console.error('  Windows (PowerShell): $env:OPENAI_API_KEY = "sk-..."');
+        console.error('  Windows (CMD):        set OPENAI_API_KEY=sk-...');
+        console.error('  macOS/Linux:          export OPENAI_API_KEY="sk-..."');
         process.exit(1);
     }
 

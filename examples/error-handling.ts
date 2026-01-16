@@ -2,6 +2,8 @@
  * Error Handling Example
  *
  * Demonstrates retry configuration and error handling.
+ *
+ * Run with: npx tsx examples/error-handling.ts
  */
 
 import { createCopilotProvider, isRetryableError, getRecoveryHint, classifyError } from '../src/index.js';

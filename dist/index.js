@@ -3,6 +3,9 @@ export { DEFAULT_PROPAGATION_CONFIG, createPropagator } from './chunk-6YJCINQN.j
 import { APICallError, LoadAPIKeyError, NoSuchModelError } from '@ai-sdk/provider';
 import { CopilotClient } from '@github/copilot-sdk';
 import { randomUUID } from 'crypto';
+import { execSync } from 'child_process';
+import { existsSync } from 'fs';
+import { join } from 'path';
 
 // src/message-mapper.ts
 function mapPromptToCopilotFormat(messages) {
@@ -391,6 +394,19 @@ function getDefaultUsage() {
 }
 
 // src/tool-mapper.ts
+function mapToolsWithHandlers(tools) {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: cleanJsonSchema(tool.inputSchema),
+    handler: async () => {
+      return {
+        __caller_execution_required: true,
+        message: `Tool '${tool.name}' should be executed by the caller.`
+      };
+    }
+  }));
+}
 function mapToolsToCopilotFormat(tools) {
   return tools.map((tool) => ({
     name: tool.name,
@@ -830,7 +846,7 @@ var CopilotLanguageModel = class {
    * Ensures a session exists, creating one if necessary.
    * Supports Phase 4 features: BYOK, MCP servers, custom agents, structured output.
    */
-  async ensureSession(client, streaming = false, callOptions, structuredOutputAppend) {
+  async ensureSession(client, streaming = false, callOptions, structuredOutputAppend, aiSdkTools) {
     let agent = resolveAgent(this.modelId, this.options.providerOptions.customAgents);
     if (callOptions?.agent && !agent) {
       agent = this.options.providerOptions.customAgents?.find((a) => a.name === callOptions.agent) ?? null;
@@ -867,10 +883,19 @@ var CopilotLanguageModel = class {
       callMcpServers
     );
     const providerConfig = this.options.settings?.provider ?? this.options.providerOptions.provider;
+    let copilotTools;
+    if (aiSdkTools && aiSdkTools.length > 0) {
+      const functionTools = extractFunctionTools(aiSdkTools);
+      if (functionTools.length > 0) {
+        copilotTools = mapToolsWithHandlers(functionTools);
+      }
+    }
     const session = await client.createSession({
       model: actualModelId,
       provider: providerConfig,
       systemMessage,
+      tools: copilotTools,
+      // Custom tools from AI SDK with no-op handlers
       availableTools: this.options.settings?.availableTools,
       excludedTools: this.options.settings?.excludedTools,
       streaming,
@@ -922,7 +947,7 @@ var CopilotLanguageModel = class {
     }
     const callOptions = options.providerOptions?.copilot;
     const client = await this.ensureClient();
-    const session = await this.ensureSession(client, false, callOptions, structuredOutputAppend);
+    const session = await this.ensureSession(client, false, callOptions, structuredOutputAppend, options.tools);
     try {
       if (options.toolChoice) {
         const toolChoiceResult = mapToolChoiceToCopilotFormat(options.toolChoice);
@@ -1064,7 +1089,7 @@ var CopilotLanguageModel = class {
     }
     const callOptions = options.providerOptions?.copilot;
     const client = await this.ensureClient();
-    const session = await this.ensureSession(client, true, callOptions, structuredOutputAppend);
+    const session = await this.ensureSession(client, true, callOptions, structuredOutputAppend, options.tools);
     if (options.toolChoice) {
       const toolChoiceResult = mapToolChoiceToCopilotFormat(options.toolChoice);
       if (!toolChoiceResult.supported && toolChoiceResult.warning) {
@@ -1237,6 +1262,20 @@ var CopilotLanguageModel = class {
     }
   }
 };
+function resolveCliPath() {
+  if (process.platform !== "win32") {
+    return void 0;
+  }
+  try {
+    const globalPath = execSync("npm root -g", { encoding: "utf-8" }).trim();
+    const jsPath = join(globalPath, "@github", "copilot", "index.js");
+    if (existsSync(jsPath)) {
+      return jsPath;
+    }
+  } catch {
+  }
+  return void 0;
+}
 var ClientManager = class {
   constructor(options) {
     this.referenceCount = 0;
@@ -1335,8 +1374,9 @@ var ClientManager = class {
     this.state = "connecting";
     this.logger.info("Creating new CopilotClient");
     try {
+      const effectiveCliPath = this.options.cliPath ?? resolveCliPath();
       const clientOptions = {
-        cliPath: this.options.cliPath,
+        cliPath: effectiveCliPath,
         cliUrl: this.options.cliUrl,
         cwd: this.options.cwd,
         cliArgs: this.options.cliArgs,
@@ -2019,6 +2059,6 @@ function createMockClient(options = {}) {
   return client;
 }
 
-export { ClientManager, CopilotLanguageModel, DEFAULT_HEALTH_CONFIG, DEFAULT_POOL_CONFIG, DEFAULT_RETRY_OPTIONS, GEN_AI_ATTRIBUTES, HealthMonitor, METRIC_NAMES, SessionPool, buildAgentSystemMessage, calculateDelay, classifyError, cleanJsonSchema, createAbortError, createClientManager, createCopilotAPIError, createCopilotProvider, createMetrics, createMockClient, createMockSession, createReasoningContent, createReasoningContext, createRequestContext, createRetryable, createStreamContext, createTracer, createVerboseLogger, extractAgentName, extractFunctionTools, extractLatestUserMessage, formatWithContext, getAgentModelId, getDefaultUsage, getLogger, getRecoveryHint, isAgentModelId, isErrorCategory, isFunctionTool, isRetryableError, mapCopilotError, mapEventToStreamParts, mapFinishReason, mapPromptToCopilotFormat, mapReasoningEventToStreamParts, mapToolChoiceToCopilotFormat, mapToolsToCopilotFormat, mapUsageEvent, mergeMcpConfigs, mergeRetryOptions, parseJsonResponse, processStructuredOutput, resolveAgent, shouldRetry, validateAgentConfigs, validateMcpConfig, withRetry, withTiming };
+export { ClientManager, CopilotLanguageModel, DEFAULT_HEALTH_CONFIG, DEFAULT_POOL_CONFIG, DEFAULT_RETRY_OPTIONS, GEN_AI_ATTRIBUTES, HealthMonitor, METRIC_NAMES, SessionPool, buildAgentSystemMessage, calculateDelay, classifyError, cleanJsonSchema, createAbortError, createClientManager, createCopilotAPIError, createCopilotProvider, createMetrics, createMockClient, createMockSession, createReasoningContent, createReasoningContext, createRequestContext, createRetryable, createStreamContext, createTracer, createVerboseLogger, extractAgentName, extractFunctionTools, extractLatestUserMessage, formatWithContext, getAgentModelId, getDefaultUsage, getLogger, getRecoveryHint, isAgentModelId, isErrorCategory, isFunctionTool, isRetryableError, mapCopilotError, mapEventToStreamParts, mapFinishReason, mapPromptToCopilotFormat, mapReasoningEventToStreamParts, mapToolChoiceToCopilotFormat, mapToolsToCopilotFormat, mapToolsWithHandlers, mapUsageEvent, mergeMcpConfigs, mergeRetryOptions, parseJsonResponse, processStructuredOutput, resolveAgent, shouldRetry, validateAgentConfigs, validateMcpConfig, withRetry, withTiming };
 //# sourceMappingURL=index.js.map
 //# sourceMappingURL=index.js.map

@@ -2,6 +2,8 @@
  * Custom Agent Example
  *
  * Demonstrates defining and using custom agents.
+ *
+ * Run with: npx tsx examples/custom-agent.ts
  */
 
 import { createCopilotProvider } from '../src/index.js';

@@ -2,6 +2,8 @@
  * Basic Usage Example
  *
  * Demonstrates simple text generation with the Copilot provider.
+ *
+ * Run with: npx tsx examples/basic-usage.ts
  */
 
 import { createCopilotProvider } from '../src/index.js';

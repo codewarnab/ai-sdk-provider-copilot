@@ -2,6 +2,8 @@
  * Streaming Example
  *
  * Demonstrates streaming text generation with real-time output.
+ *
+ * Run with: npx tsx examples/streaming.ts
  */
 
 import { createCopilotProvider } from '../src/index.js';

@@ -39,6 +39,16 @@ export interface CopilotToolSchema {
 }
 
 /**
+ * Copilot SDK Tool interface with handler (required by SDK)
+ */
+export interface CopilotTool {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+    handler: (args: unknown) => Promise<unknown> | unknown;
+}
+
+/**
  * Result of tool choice mapping
  */
 export interface ToolChoiceResult {
@@ -49,13 +59,42 @@ export interface ToolChoiceResult {
 }
 
 /**
- * Maps AI SDK V3 function tools to Copilot SDK tool format.
+ * Maps AI SDK V3 function tools to Copilot SDK format WITH handlers.
+ * 
+ * The handlers are no-ops that return a marker indicating the tool call
+ * should be executed by the caller (AI SDK return-to-caller model).
+ * This allows the model to see and call the tools, with results captured
+ * via the assistant.message event's toolRequests.
+ *
+ * @param tools - AI SDK V3 function tools
+ * @returns Copilot SDK tools with no-op handlers
+ */
+export function mapToolsWithHandlers(
+    tools: LanguageModelV3FunctionTool[]
+): CopilotTool[] {
+    return tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: cleanJsonSchema(tool.inputSchema as JsonSchemaObject),
+        handler: async () => {
+            // Return marker - actual execution happens via AI SDK caller
+            return {
+                __caller_execution_required: true,
+                message: `Tool '${tool.name}' should be executed by the caller.`,
+            };
+        },
+    }));
+}
+
+/**
+ * Maps AI SDK V3 function tools to Copilot SDK tool format (schema only).
  *
  * Key difference: AI SDK tools don't have handlers (caller executes),
  * but Copilot SDK expects handlers. We create tools WITHOUT handlers
  * to signal "return to caller" pattern - the toolRequests in assistant.message
  * events will be captured and returned to the AI SDK caller.
  *
+ * @deprecated Use mapToolsWithHandlers instead - Copilot SDK requires handlers
  * @param tools - AI SDK V3 function tools
  * @returns Copilot SDK tool schemas (without handlers for return-to-caller model)
  */

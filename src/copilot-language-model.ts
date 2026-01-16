@@ -32,7 +32,7 @@ import {
     getDefaultUsage,
     type ToolRequest,
 } from './event-mapper.js';
-import { mapToolChoiceToCopilotFormat } from './tool-mapper.js';
+import { mapToolChoiceToCopilotFormat, mapToolsWithHandlers, extractFunctionTools, type CopilotTool } from './tool-mapper.js';
 import { processStructuredOutput } from './structured-output.js';
 import { createReasoningContext, createReasoningContent } from './reasoning-mapper.js';
 import { mergeMcpConfigs } from './mcp-config.js';
@@ -133,7 +133,8 @@ export class CopilotLanguageModel implements LanguageModelV3 {
         client: CopilotClient,
         streaming = false,
         callOptions?: CopilotCallOptions,
-        structuredOutputAppend?: string
+        structuredOutputAppend?: string,
+        aiSdkTools?: unknown[]  // AI SDK tools to map and pass to session
     ): Promise<CopilotSession> {
         // Check if this is an agent model or agent specified via call options
         let agent = resolveAgent(this.modelId, this.options.providerOptions.customAgents);
@@ -190,10 +191,20 @@ export class CopilotLanguageModel implements LanguageModelV3 {
         const providerConfig = this.options.settings?.provider
             ?? this.options.providerOptions.provider;
 
+        // Map AI SDK tools to Copilot SDK format with handlers
+        let copilotTools: CopilotTool[] | undefined;
+        if (aiSdkTools && aiSdkTools.length > 0) {
+            const functionTools = extractFunctionTools(aiSdkTools);
+            if (functionTools.length > 0) {
+                copilotTools = mapToolsWithHandlers(functionTools);
+            }
+        }
+
         const session = await client.createSession({
             model: actualModelId,
             provider: providerConfig,
             systemMessage,
+            tools: copilotTools,  // Custom tools from AI SDK with no-op handlers
             availableTools: this.options.settings?.availableTools,
             excludedTools: this.options.settings?.excludedTools,
             streaming,
@@ -267,7 +278,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
 
         // Acquire client and create session
         const client = await this.ensureClient();
-        const session = await this.ensureSession(client, false, callOptions, structuredOutputAppend);
+        const session = await this.ensureSession(client, false, callOptions, structuredOutputAppend, options.tools);
 
         try {
             // Handle tool choice - emit warning if unsupported
@@ -459,7 +470,7 @@ export class CopilotLanguageModel implements LanguageModelV3 {
 
         // Acquire client and create session with all Phase 4 features
         const client = await this.ensureClient();
-        const session = await this.ensureSession(client, true, callOptions, structuredOutputAppend);
+        const session = await this.ensureSession(client, true, callOptions, structuredOutputAppend, options.tools);
 
         // Handle tool choice - emit warning if unsupported
         if (options.toolChoice) {
