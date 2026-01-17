@@ -69,10 +69,32 @@ const copilot = createCopilotProvider({
   },
 
   // Custom agents
-  customAgents: [{
-    name: 'code-reviewer',
-    prompt: 'You are an expert code reviewer...',
-  }],
+  customAgents: [
+    {
+      name: 'code-reviewer',
+      displayName: 'Code Reviewer',
+      description: 'An expert code reviewer focused on best practices',
+      prompt: 'You are an expert code reviewer...',
+    },
+  ],
+
+  // Session pooling for efficiency
+  sessionPool: {
+    enabled: true,
+    maxIdleSessions: 3,
+  },
+
+  // Health monitoring for reliability
+  healthMonitor: {
+    failureThreshold: 3,
+    onHealthChange: (healthy, reason) => console.log(`Health: ${healthy}`),
+  },
+
+  // OpenTelemetry
+  telemetry: {
+    serviceName: 'my-app',
+    recordContent: false,
+  }
 });
 ```
 
@@ -90,17 +112,73 @@ const model = copilot('gpt-4', {
 });
 ```
 
+## Features
+
+### Custom Agents
+
+Define specialized agents with custom prompts:
+
+```typescript
+const copilot = createCopilotProvider({
+  customAgents: [{
+    name: 'explainer',
+    displayName: 'Code Explainer',
+    prompt: 'You are a helpful teacher...'
+  }]
+});
+
+// Use via model ID or provider options
+const model = copilot('agent/explainer');
+// OR
+const result = await generateText({
+  model: copilot('gpt-4'),
+  providerOptions: { copilot: { agent: 'explainer' } }
+});
+```
+
+### Tool Calling
+
+Support for both built-in Copilot tools and custom tools via Zod schemas:
+
+```typescript
+const result = await generateText({
+  model: copilot('gpt-4'),
+  tools: {
+    weather: {
+      description: 'Get weather',
+      parameters: z.object({ location: z.string() })
+    }
+  }
+});
+```
+
+### Session Management
+
+Reuse sessions for better performance:
+
+```typescript
+const copilot = createCopilotProvider({
+  sessionPool: {
+    enabled: true,
+    maxIdleSessions: 3,
+    idleTimeoutMs: 300_000,
+  }
+});
+```
+
 ## Supported Features
 
 | Feature | Status |
 |---------|--------|
 | `generateText()` | ✅ |
 | `streamText()` | ✅ |
-| Tool calling | ✅ |
+| Tool calling | ✅ (Custom & Built-in) |
 | Custom agents | ✅ |
 | BYOK (Bring Your Own Key) | ✅ |
 | MCP server integration | ✅ |
 | Response caching | ✅ |
+| Session pooling | ✅ |
+| Health monitoring | ✅ |
 | Retry with backoff | ✅ |
 | OpenTelemetry integration | ✅ |
 | `generateObject()` | ⚠️ Prompt-based only |

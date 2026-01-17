@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.1.3] (2026-01-17)
+
+### Features
+
+*   **tool-calling:** Added support for custom tools using Zod schemas alongside built-in Copilot tools
+*   **session-pool:** Implemented session pooling for efficient connection reuse
+*   **health-monitor:** Added health monitoring and automatic recovery for CLI connections
+*   **agents:** Enhanced custom agents with display names, descriptions, and multiple usage patterns
+*   **telemetry:** Improved OpenTelemetry configuration structure
+
 ### [0.1.2] (2026-01-16)
 
 ### Features
