@@ -8,4 +8,8 @@ export default defineConfig({
     sourcemap: true,
     splitting: true,
     treeshake: true,
+    external: [
+        '@ai-sdk/provider',
+        '@ai-sdk/provider-utils',
+    ],
 });

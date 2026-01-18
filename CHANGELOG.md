@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.1.4] (2026-01-18)
+
+### Improvements
+
+*   **build:** Reduced package size by ~75% (from 1.5MB to ~400KB)
+    *   Removed source files (`src/`) from published package
+    *   Externalized `@ai-sdk/provider` and `@ai-sdk/provider-utils` dependencies
+    *   Added `.npmignore` for comprehensive exclusion of dev files
+
 ### [0.1.3] (2026-01-17)
 
 ### Features

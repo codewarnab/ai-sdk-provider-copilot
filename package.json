@@ -1,6 +1,6 @@
 {
   "name": "ai-sdk-provider-copilot",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Community AI SDK provider for GitHub Copilot CLI",
   "author": "codewarnab <dev@codewarnab.in>",
   "license": "MIT",
@@ -46,7 +46,6 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "src",
     "README.md"
   ],
   "scripts": {

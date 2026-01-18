@@ -1,0 +1,43 @@
+# Source files (use compiled output)
+src/
+
+# Test files
+**/*.test.ts
+**/*.spec.ts
+**/*.test.js
+**/*.spec.js
+
+# Configuration files
+*.config.*
+tsconfig.json
+tsconfig.*.json
+.prettierrc
+.eslintrc*
+.editorconfig
+
+# Development files
+.github/
+coverage/
+.nyc_output/
+
+# Build artifacts
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+
+# Examples (not needed in package)
+examples/
+
+# Other files
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Documentation (README is included via files)
+docs/
+CONTRIBUTING.md
+GEMINI.md
